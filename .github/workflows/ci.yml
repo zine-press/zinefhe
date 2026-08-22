@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Checker self-test
+        run: node tools/check-docs.mjs --selftest
+
+      - name: Consistency
+        run: node tools/check-docs.mjs
+
+  links:
+    name: links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Relative links resolve
+        run: |
+          set -o pipefail
+          scanned=0
+          missing=0
+          while IFS= read -r file; do
+            scanned=$((scanned + 1))
+            dir=$(dirname "$file")
+            while IFS= read -r target; do
+              [ -z "$target" ] && continue
+              path="${target%%#*}"
+              [ -z "$path" ] && continue
+              if [ ! -e "$dir/$path" ]; then
+                echo "  FAIL $file -> $target"
+                missing=$((missing + 1))
+              fi
+            done < <(grep -oE '\]\([^)#][^)]*\)' "$file" \
+                       | sed -E 's/^\]\(//; s/\)$//' \
+                       | grep -vE '^(https?:|mailto:)')
+          done < <(find . -name '*.md' -not -path './.git/*')
+          echo "scanned=$scanned missing=$missing"
+          if [ "$scanned" -eq 0 ]; then
+            echo "verdict=SELF-FAIL -- no markdown found, an empty tree scores full marks"
+            exit 2
+          fi
+          if [ "$missing" -gt 0 ]; then
+            echo "verdict=FAIL"
+            exit 1
+          fi
+          echo "verdict=PASS"
